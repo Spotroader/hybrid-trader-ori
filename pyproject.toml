@@ -1,0 +1,15 @@
+[project]
+name = "hibrit-trader"
+version = "0.0.1"
+description = "On-chain fırsat avcısı — çok ağlı DEX botu"
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hibrit_trader = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

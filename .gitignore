@@ -1,0 +1,18 @@
+# Gizli — asla commit etme
+.env
+.env.local
+*.key
+*.keypair.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Veri
+data/
+*.parquet
+
+# OS
+.DS_Store

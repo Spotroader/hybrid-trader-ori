@@ -1,0 +1,17 @@
+# Solana memecoin KOL / smart-money izleme listesi (public on-chain adresler)
+# Kaynak: community curated lists (e.g. thealphaclub.io) — adresler değişebilir; güncelle.
+# Override: .env ALPHA_WALLETS=addr1,addr2 veya bu dosyayı düzenle
+# Helius: HELIUS_API_KEY gerekli (scripts/setup-helius-alpha.sh)
+
+2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f  # Cupsey
+DNfuF1L62WWyW3pNakVkyGGFzVVhj4Yr52jSmdTyeBHm  # Gake
+CyaE1VxvBrahnPWkqm5VsdCvyS2QmNht2UFrKJHga54o  # Cented
+4Be9CvxqHW6BYiRAxW9Q3xu1ycTMWaL5z8NX4HR3ha7t  # Mitch
+G6fUXjMKPJzCY1rveAE6Qm7wy5U3vZgKDJmN1VPAdiZC  # clukz
+4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk  # jijo
+AeLaMjzxErZt4drbWVWvcxpVyo8p94xu5vrg41eZPFe3  # simple
+EHg5YkU2SZBTvuT87rUsvxArGp3HLeye1fXaSDfuMyaf  # Til
+DYAn4XpAkN5mhiXkRB7dGq4Jadnx6XYgu8L5b3WGhbrt  # The Doc
+FAicXNV5FVqtfbpn4Zccs71XcfGeyxBSGbqLDyDJZjke  # Radiance
+G3g1CKqKWSVEVURZDNMazDBv7YAhMNTjhJBVRTiKZygk  # insyder
+GJA1HEbxGnqBhBifH9uQauzXSB53to5rhDrzmKxhSU65  # latuche

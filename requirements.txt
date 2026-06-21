@@ -1,0 +1,11 @@
+httpx
+pandas
+pyarrow
+fastapi
+uvicorn
+python-dotenv
+pydantic
+solders
+solana
+web3
+pytest
