@@ -21,7 +21,7 @@ from hibrit_trader.jupiter import (
 )
 from hibrit_trader.killswitch import notify
 from hibrit_trader.live_sim import fetch_token_decimals
-from hibrit_trader.paper import Position, Trade, _now_iso
+from hibrit_trader.paper import Position, Trade, _now_iso, enrich_trade_from_position
 from hibrit_trader.phantom_trade import PhantomPendingTrade, phantom_queue
 from hibrit_trader.scanner import Pair
 
@@ -191,9 +191,12 @@ class PhantomLiveBroker:
                 closed_at=_now_iso(),
                 exit_reason=meta.get("reason", "phantom"),
             )
+            pool = meta["pool_address"]
+            _src_pos = next((p for p in self.positions if p.pool_address == pool), None)
+            if _src_pos is not None:
+                enrich_trade_from_position(trade, _src_pos)
             self.realized_pnl += pnl
             self._deployable_usd += proceeds
-            pool = meta["pool_address"]
             self.positions = [p for p in self.positions if p.pool_address != pool]
             self._append_trade(trade)
             self._save()

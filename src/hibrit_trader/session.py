@@ -21,6 +21,8 @@ from hibrit_trader.position_sizer import compute_position_usd
 from hibrit_trader.safety import SafetyReport, check_token, entry_safety_ok
 from hibrit_trader.scanner import Pair, scan_all
 from hibrit_trader.score import rank
+from hibrit_trader.dex_trending_strategy import pool_age_hours
+from hibrit_trader import telemetry
 from hibrit_trader.slippage_edge import estimate_entry_slippage_pct
 from hibrit_trader.peak_intelligence import ExitContext, whale_for_pair
 from hibrit_trader.phantom_trade import PhantomPendingTrade
@@ -107,6 +109,9 @@ class Engine:
         self._entry_diagnostics: list[dict] = []
         self._growth_watchlist: list[dict] = []
         self._pair_cooldown = PairCooldownStore()
+        self._tick_started_ts: float = 0.0
+        # Telemetri reddetme dedup: (token, reject_type) -> son log zamanı
+        self._decision_logged: dict[tuple[str, str], float] = {}
 
     def _reset_daily_if_needed(self) -> None:
         today = date.today()
@@ -454,6 +459,7 @@ class Engine:
                 self._missing_ticks[pos.pool_address] = self._missing_ticks.get(pos.pool_address, 0) + 1
 
             init_position_exit_state(pos, pair)
+            self._update_excursion(pos, price, pair)
             score = score_map.get(pos.pool_address, 0)
             missing = self._missing_ticks.get(pos.pool_address, 0)
             if pair and is_trending_late_pump(pair):
@@ -506,6 +512,89 @@ class Engine:
 
     def _pair_on_cooldown(self, token_address: str, pair_name: str = "") -> bool:
         return self._pair_cooldown.on_cooldown(token_address, pair_name)
+
+    # ---- Telemetri ----------------------------------------------------------
+    def _regime_stamp(self) -> tuple[str, int | None, float | None]:
+        bv = self._brain_verdict
+        regime = getattr(bv, "regime", "") if bv is not None else ""
+        fg = getattr(bv, "fear_greed", None) if bv is not None else None
+        return regime, fg, self._macro_avg
+
+    def _update_excursion(self, pos: Position, price: float, pair: Pair | None) -> None:
+        """Her tick: pozisyonun MFE/MAE (tepe/dip) + min likiditesini işle."""
+        if pos.entry_price > 0 and price > 0:
+            pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+            held = max(0.0, time.time() - pos.opened_ts) if pos.opened_ts else 0.0
+            if pnl_pct > pos.mfe_pct:
+                pos.mfe_pct = pnl_pct
+                pos.mfe_at_sec = held
+            if pnl_pct < pos.mae_pct:
+                pos.mae_pct = pnl_pct
+                pos.mae_at_sec = held
+        if pair is not None and pair.liquidity_usd > 0:
+            base = pos.liq_min if pos.liq_min > 0 else (pos.liq_entry or pair.liquidity_usd)
+            pos.liq_min = min(base, pair.liquidity_usd)
+
+    def _pair_features(self, pair: Pair) -> dict:
+        """Aday/giriş için ham sayısal özellikler — eşik kalibrasyonu için."""
+        return {
+            "liquidity": round(pair.liquidity_usd, 2),
+            "market_cap": round(pair.market_cap_usd, 2),
+            "price": pair.price_usd,
+            "chg_m5": pair.chg_m5,
+            "chg_h1": pair.chg_h1,
+            "chg_h24": pair.chg_h24,
+            "vol_m5": round(pair.vol_m5, 2),
+            "vol_h1": round(pair.vol_h1, 2),
+            "vol_h24": round(pair.vol_h24, 2),
+            "txns_h1": pair.txns_h1,
+            "txns_m5": pair.txns_m5,
+            "boost_score": int(getattr(pair, "boost_score", 0) or 0),
+            "token_age_h": pool_age_hours(pair),
+            "source": pair.discovery_source or "geckoterminal",
+        }
+
+    def _deploy_pct(self) -> float:
+        locked = sum(p.cost_usd for p in self.broker.positions)
+        equity = getattr(self.broker, "balance", 0.0) + locked
+        return round(100 * locked / equity, 1) if equity > 0 else 0.0
+
+    def _log_reject(
+        self,
+        pair: Pair,
+        skor: float,
+        reason: str,
+        reject_type: str,
+        *,
+        cooldown_sec: float = 600.0,
+        extra: dict | None = None,
+    ) -> None:
+        """Reddedilen/kaçırılan aday — token+tür başına dedup ile decisions.jsonl."""
+        key = (pair.token_address, reject_type)
+        now = time.time()
+        last = self._decision_logged.get(key, 0.0)
+        if now - last < cooldown_sec:
+            return
+        self._decision_logged[key] = now
+        regime, fg, macro = self._regime_stamp()
+        row = {
+            "pair": pair.name,
+            "chain": pair.chain,
+            "token_address": pair.token_address,
+            "pool_address": pair.pool_address,
+            "score": round(skor, 1),
+            "reason": reason,
+            "reject_type": reject_type,
+            "open_pos_count": self._entry_open_count(),
+            "deploy_pct": self._deploy_pct(),
+            "regime": regime,
+            "fear_greed": fg,
+            "macro_avg": macro,
+            "features": self._pair_features(pair),
+        }
+        if extra:
+            row.update(extra)
+        telemetry.log_decision(row)
 
     def _liquidity_for_pool(self, pool_address: str) -> float:
         for _s, p in self.watchlist:
@@ -639,6 +728,10 @@ class Engine:
                 genesis_ok=genesis_ok,
             )
             if self.settings.confluence_required and not conf.enter_ok:
+                self._log_reject(
+                    pair, skor, conf.blocker or "konfluans yetersiz", "filter",
+                    extra={"conf_score": round(conf.score, 1), "smart_money_count": sm_count},
+                )
                 continue
             candidates.append((conf.score, skor, pair, conf, sm_ok, sm_note, sm_count, ds_ok, ds_sig, pump))
 
@@ -707,10 +800,18 @@ class Engine:
         if decision.action != "enter":
             if skor >= self.policy.entry_score_min:
                 self._record_decision(decision)
+            if not validate_only:
+                self._log_reject(
+                    pair, skor, decision.reason or "entry gate", "filter",
+                    extra={"safety_ok": safety_ok, "slip_pct": round(slip_pct, 3),
+                           "smart_money_count": _sm_count},
+                )
             return False
         if validate_only:
             return True
 
+        px_decision = pair.price_usd
+        decided_ts = time.time()
         try:
             reason = f"{decision.reason} · {conf.summary()}"
             if pump.moonshot_score >= moonshot_min_score():
@@ -723,7 +824,7 @@ class Engine:
                 reason += f" · {safety_note}"
             if ds_sig.entry_ok and trending_fast_enabled():
                 reason += f" · {ds_sig.reason}"
-            self.broker.buy(pair, position_usd, skor)
+            bought = self.broker.buy(pair, position_usd, skor)
         except PhantomPendingTrade:
             log.info("Phantom alım imzası bekleniyor: %s", pair.name)
             self._record_decision(
@@ -733,10 +834,105 @@ class Engine:
         except ValueError as e:
             log.warning("Alım başarısız: %s", e)
             self._record_decision(Decision("skip", str(e), pair.name, skor))
+            msg = str(e).lower()
+            if "bakiye" in msg or "yetersiz" in msg:
+                self._log_reject(pair, skor, str(e), "no_capital", cooldown_sec=300)
             return False
         self._last_prices[pair.pool_address] = pair.price_usd
+        pos = bought if isinstance(bought, Position) else None
+        if pos is not None:
+            try:
+                self._log_entry_attribution(
+                    pos, pair, px_decision=px_decision, decided_ts=decided_ts,
+                    skor=skor, conf=conf, sm_count=_sm_count, slip_pct=slip_pct,
+                    cex_hold=cex_hold, ds_sig=ds_sig, ds_ok=ds_ok, genesis_ok=genesis_ok,
+                    safety_ok=safety_ok, report=report, pump=pump, position_usd=position_usd,
+                )
+            except Exception:
+                log.debug("attribution log hatası", exc_info=True)
         self._record_decision(Decision("enter", reason, pair.name, conf_score))
         return True
+
+    def _log_entry_attribution(
+        self,
+        pos: Position,
+        pair: Pair,
+        *,
+        px_decision: float,
+        decided_ts: float,
+        skor: float,
+        conf,
+        sm_count: int,
+        slip_pct: float,
+        cex_hold: float,
+        ds_sig,
+        ds_ok: bool,
+        genesis_ok: bool,
+        safety_ok: bool,
+        report,
+        pump,
+        position_usd: float,
+    ) -> None:
+        """Giriş anı damgası: pos'a gecikme/rejim yaz + attribution.jsonl snapshot."""
+        fill = pos.entry_price
+        pos.px_decision = px_decision
+        pos.decision_to_entry_sec = round(max(0.0, time.time() - decided_ts), 3)
+        pos.entry_drift_pct = round((fill / px_decision - 1) * 100, 3) if px_decision > 0 else 0.0
+        regime, fg, macro = self._regime_stamp()
+        pos.entry_regime = regime
+        pos.entry_fear_greed = fg
+        pos.entry_macro_avg = macro
+        bv = self._brain_verdict
+        row = {
+            "trade_id": pos.trade_id,
+            "pair": pair.name,
+            "chain": pair.chain,
+            "token_address": pair.token_address,
+            "pool_address": pair.pool_address,
+            "source": pos.discovery_source,
+            "score": round(skor, 1),
+            "conf_score": round(getattr(conf, "score", 0.0), 1),
+            "conf_layers": getattr(conf, "layers", {}),
+            "conf_breakdown": getattr(conf, "breakdown", {}),
+            "conf_blocker": getattr(conf, "blocker", None),
+            "pump": {
+                "moonshot_score": round(getattr(pump, "moonshot_score", 0.0), 1),
+                "turnover": round(getattr(pump, "turnover", 0.0), 2),
+                "age_hours": getattr(pump, "age_hours", None),
+                "wallet_count": getattr(pump, "wallet_count", 0),
+                "whale_signal": getattr(pump, "whale_signal", False),
+            },
+            "slip_pct": round(slip_pct, 3),
+            "ds_score": round(getattr(ds_sig, "score", 0.0), 1),
+            "ds_entry_ok": bool(getattr(ds_sig, "entry_ok", False)),
+            "ds_ok": bool(ds_ok),
+            "genesis_ok": bool(genesis_ok),
+            "safety_ok": bool(safety_ok),
+            "regime": regime,
+            "fear_greed": fg,
+            "macro_avg": macro,
+            "action_bias": getattr(bv, "action_bias", None) if bv is not None else None,
+            "holder": {
+                "top1_pct": report.metrics.get("top1_holder_pct"),
+                "top10_pct": report.metrics.get("top10_holder_pct"),
+                "insider_count": report.metrics.get("insider_count"),
+            },
+            "mint_revoked": report.metrics.get("mint_revoked"),
+            "freeze_revoked": report.metrics.get("freeze_revoked"),
+            "rugcheck_score": report.metrics.get("rugcheck_score"),
+            "token_age_h": pool_age_hours(pair),
+            "liquidity": round(pair.liquidity_usd, 2),
+            "market_cap": round(pair.market_cap_usd, 2),
+            "traders_h1": pair.txns_h1,
+            "smart_money_count": sm_count,
+            "cex_hold": round(cex_hold, 1),
+            "position_usd": round(position_usd, 2),
+            "price_at_decision": px_decision,
+            "price_at_entry": fill,
+            "decision_to_entry_sec": pos.decision_to_entry_sec,
+            "entry_drift_pct": pos.entry_drift_pct,
+        }
+        telemetry.log_attribution(row)
 
     def _try_slot_rotation(
         self,
@@ -806,6 +1002,13 @@ class Engine:
             return
 
         if slots_full:
+            # İyi aday geldi ama slot dolu — aşırı işlemin gerçek bedeli (kaçan kazanan)
+            best = candidates[0]
+            self._log_reject(
+                best[2], best[1], "slot dolu — rotasyon denenecek", "no_slot",
+                cooldown_sec=300,
+                extra={"conf_score": round(best[0], 1), "max_open": self.policy.max_open_positions},
+            )
             self._try_slot_rotation(pairs, ranked, candidates[0], client)
             return
 
@@ -815,6 +1018,7 @@ class Engine:
 
     def tick(self) -> None:
         try:
+            self._tick_started_ts = time.time()
             self._reset_daily_if_needed()
             self._refresh_macro_if_needed()
             self._refresh_brain_if_needed()

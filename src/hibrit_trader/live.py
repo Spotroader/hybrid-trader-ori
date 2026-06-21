@@ -21,7 +21,7 @@ from hibrit_trader.jupiter import (
 )
 from hibrit_trader.live_sim import fetch_token_decimals
 from hibrit_trader.killswitch import notify
-from hibrit_trader.paper import Position, Trade, _now_iso
+from hibrit_trader.paper import Position, Trade, _now_iso, enrich_trade_from_position, new_trade_id
 from hibrit_trader.scanner import Pair
 
 log = logging.getLogger(__name__)
@@ -132,7 +132,11 @@ class LiveBroker:
             opened_at=_now_iso(),
             entry_score=score,
             amount_raw=out_raw,
+            discovery_source=pair.discovery_source or "geckoterminal",
+            liq_entry=pair.liquidity_usd,
+            liq_min=pair.liquidity_usd,
         )
+        pos.trade_id = new_trade_id(pos.pool_address, pos.opened_ts or 0.0)
         self.positions.append(pos)
         self._save()
         self._notify(f"🟢 ALIM [{pair.chain}] {pair.name} ${cost:.2f} tx={sig}...")
@@ -173,6 +177,7 @@ class LiveBroker:
             closed_at=_now_iso(),
             exit_reason=reason,
         )
+        enrich_trade_from_position(trade, pos, liq_exit=liquidity_usd)
         self.realized_pnl += pnl
         self.positions = [p for p in self.positions if p.pool_address != pos.pool_address]
         self._append_trade(trade)

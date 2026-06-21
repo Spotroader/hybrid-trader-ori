@@ -30,6 +30,7 @@ def _max_top10_holder_pct() -> float:
 class SafetyReport:
     ok: bool
     reasons: list = field(default_factory=list)  # RED nedenleri (boş = temiz)
+    metrics: dict = field(default_factory=dict)  # ham sayısal: top1/top10/insider, mint/freeze, rugcheck_score
 
 
 def _goplus_no_data(report: SafetyReport) -> bool:
@@ -100,18 +101,28 @@ def _evm_decision(d: dict) -> SafetyReport:
         reasons.append("mint edilebilir")
     holders = d.get("holders") or []
     top10 = sum(float(h.get("percent") or 0) for h in holders[:10]) * 100
+    top1 = float(holders[0].get("percent") or 0) * 100 if holders else 0.0
     cap = _max_top10_holder_pct()
     if top10 > cap:
         reasons.append(f"top10 holder %{top10:.0f}")
-    return SafetyReport(ok=not reasons, reasons=reasons)
+    mintable = d.get("is_mintable") == "1"
+    metrics = {
+        "top1_holder_pct": round(top1, 2),
+        "top10_holder_pct": round(top10, 2),
+        "mint_revoked": not mintable,
+        "honeypot": d.get("is_honeypot") == "1",
+    }
+    return SafetyReport(ok=not reasons, reasons=reasons, metrics=metrics)
 
 
 def _solana_decision(d: dict) -> SafetyReport:
     """GoPlus Solana token_security yanıtından karar üretir."""
     reasons = []
-    if (d.get("mintable") or {}).get("status") == "1":
+    mintable = (d.get("mintable") or {}).get("status") == "1"
+    freezable = (d.get("freezable") or {}).get("status") == "1"
+    if mintable:
         reasons.append("mint yetkisi açık")
-    if (d.get("freezable") or {}).get("status") == "1":
+    if freezable:
         reasons.append("freeze yetkisi açık")
     if (d.get("transfer_fee_upgradable") or {}).get("status") == "1":
         reasons.append("transfer ücreti değiştirilebilir")
@@ -119,10 +130,17 @@ def _solana_decision(d: dict) -> SafetyReport:
         reasons.append("transfer hook var")
     holders = d.get("holders") or []
     top10 = sum(float(h.get("percent") or 0) for h in holders[:10])
+    top1 = float(holders[0].get("percent") or 0) if holders else 0.0
     cap = _max_top10_holder_pct()
     if top10 > cap:
         reasons.append(f"top10 holder %{top10:.0f}")
-    return SafetyReport(ok=not reasons, reasons=reasons)
+    metrics = {
+        "top1_holder_pct": round(top1, 2),
+        "top10_holder_pct": round(top10, 2),
+        "mint_revoked": not mintable,
+        "freeze_revoked": not freezable,
+    }
+    return SafetyReport(ok=not reasons, reasons=reasons, metrics=metrics)
 
 
 def _check_goplus(client: httpx.Client, chain: str, token_address: str) -> SafetyReport:
@@ -160,18 +178,22 @@ def check_token(
 ) -> SafetyReport:
     """Tek token güvenlik kararı. Veri yoksa/erişim hatasında RED (fail-closed)."""
     report = _check_goplus(client, chain, token_address)
+    metrics = dict(report.metrics)
     if chain != "solana":
         return report
     from hibrit_trader.rugcheck import check_rugcheck_summary, rugcheck_enabled
 
     if rugcheck_enabled():
         rug = check_rugcheck_summary(client, token_address)
+        metrics.update(rug.metrics)
         report = _merge_solana_safety(report, rug)
 
     from hibrit_trader.holder_risk import check_holder_concentration, holder_risk_enabled
 
     if holder_risk_enabled():
         holder = check_holder_concentration(client, token_address, genesis_ok=genesis_ok)
+        metrics.update(holder.metrics)
         if not holder.ok and holder.reasons and not holder.reasons[0].startswith("holder risk skip"):
-            return SafetyReport(ok=False, reasons=list(holder.reasons))
+            return SafetyReport(ok=False, reasons=list(holder.reasons), metrics=metrics)
+    report.metrics = metrics
     return report

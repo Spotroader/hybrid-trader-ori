@@ -245,6 +245,18 @@ def api_trades() -> list:
     return list(reversed(trades[-100:]))
 
 
+@app.get("/api/telemetry")
+def api_telemetry(stream: str = Query("decisions"), limit: int = Query(100)) -> dict:
+    """Gözlem akışı — attribution (giriş anı) / decisions (red/kaçan) + özet."""
+    from hibrit_trader import telemetry
+
+    return {
+        "summary": telemetry.summarize(),
+        "stream": stream,
+        "rows": telemetry.read_recent(stream, min(limit, 500)),
+    }
+
+
 @app.post("/api/kill")
 def api_kill_activate() -> dict:
     activate("panel")

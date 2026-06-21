@@ -38,6 +38,21 @@ class Position:
     initial_amount_token: float = 0.0
     opened_ts: float = 0.0
     atr_pct_at_entry: float = 0.0
+    # ---- Telemetri (giriş anı damgası + döngüde işlenen tepe/dip) ----
+    trade_id: str = ""
+    discovery_source: str = ""
+    entry_regime: str = ""
+    entry_fear_greed: int | None = None
+    entry_macro_avg: float | None = None
+    px_decision: float = 0.0          # "al" kararı anındaki fiyat
+    decision_to_entry_sec: float = 0.0
+    entry_drift_pct: float = 0.0      # (fill/px_decision - 1) * 100
+    liq_entry: float = 0.0
+    liq_min: float = 0.0              # tutuş boyunca görülen min likidite
+    mfe_pct: float = 0.0              # max favorable excursion (tepe kâr %)
+    mae_pct: float = 0.0              # max adverse excursion (dip zarar %)
+    mfe_at_sec: float = 0.0           # MFE'ye ulaşıldığı tutuş süresi (sn)
+    mae_at_sec: float = 0.0
 
 
 @dataclass
@@ -52,6 +67,56 @@ class Trade:
     opened_at: str
     closed_at: str
     exit_reason: str
+    # ---- Telemetri (Position'dan kopyalanır — attribution ile join için) ----
+    trade_id: str = ""
+    token_address: str = ""
+    source: str = ""
+    regime: str = ""
+    fear_greed: int | None = None
+    entry_score: float = 0.0
+    pnl_pct: float = 0.0
+    hold_sec: float = 0.0
+    liq_entry: float = 0.0
+    liq_min: float = 0.0
+    liq_exit: float = 0.0
+    mfe_pct: float = 0.0
+    mae_pct: float = 0.0
+    mfe_at_sec: float = 0.0
+    mae_at_sec: float = 0.0
+    px_decision: float = 0.0
+    dec_to_entry_sec: float = 0.0
+    entry_drift: float = 0.0
+    buyers: int | None = None
+    sellers: int | None = None
+
+
+def new_trade_id(pool_address: str, opened_ts: float) -> str:
+    """Pozisyon başına kararlı id — attribution/decisions/trades join anahtarı."""
+    return f"{(pool_address or 'x')[:10]}-{int(opened_ts)}"
+
+
+def enrich_trade_from_position(trade: "Trade", pos: "Position", *, liq_exit: float = 0.0) -> "Trade":
+    """Trade'e Position giriş-anı damgasını + tutuş metriklerini kopyalar (tüm modlar)."""
+    trade.trade_id = pos.trade_id
+    trade.token_address = pos.token_address
+    trade.source = pos.discovery_source
+    trade.regime = pos.entry_regime
+    trade.fear_greed = pos.entry_fear_greed
+    trade.entry_score = pos.entry_score
+    trade.hold_sec = round(max(0.0, time.time() - pos.opened_ts), 1) if pos.opened_ts else 0.0
+    trade.liq_entry = round(pos.liq_entry, 2)
+    trade.liq_min = round(pos.liq_min or pos.liq_entry, 2)
+    trade.liq_exit = round(liq_exit, 2)
+    trade.mfe_pct = round(pos.mfe_pct, 3)
+    trade.mae_pct = round(pos.mae_pct, 3)
+    trade.mfe_at_sec = round(pos.mfe_at_sec, 1)
+    trade.mae_at_sec = round(pos.mae_at_sec, 1)
+    trade.px_decision = pos.px_decision
+    trade.dec_to_entry_sec = round(pos.decision_to_entry_sec, 3)
+    trade.entry_drift = round(pos.entry_drift_pct, 3)
+    if trade.cost_usd:
+        trade.pnl_pct = round(100 * trade.pnl_usd / max(trade.cost_usd, 0.01), 3)
+    return trade
 
 
 def _slippage(usd: float, liquidity_usd: float) -> float:
@@ -163,7 +228,11 @@ class PaperBroker:
             peak_price_usd=effective_price,
             initial_amount_token=amount,
             opened_ts=time.time(),
+            discovery_source=pair.discovery_source or "geckoterminal",
+            liq_entry=pair.liquidity_usd,
+            liq_min=pair.liquidity_usd,
         )
+        pos.trade_id = new_trade_id(pos.pool_address, pos.opened_ts)
         self.balance -= total
         self.positions.append(pos)
         self._save()
@@ -199,6 +268,7 @@ class PaperBroker:
             closed_at=_now_iso(),
             exit_reason=reason,
         )
+        enrich_trade_from_position(trade, pos, liq_exit=liquidity_usd)
         self.balance += proceeds
         self.realized_pnl += pnl
         if close_position:

@@ -47,7 +47,7 @@ def summary_from_payload(data: dict) -> SafetyReport:
     ok = not danger and score_norm <= MAX_SCORE_NORMALISED
     if not ok and not reasons:
         reasons.append("RugCheck RED")
-    return SafetyReport(ok=ok, reasons=reasons)
+    return SafetyReport(ok=ok, reasons=reasons, metrics={"rugcheck_score": round(score_norm, 1)})
 
 
 def check_rugcheck_summary(client: httpx.Client, mint: str) -> SafetyReport:

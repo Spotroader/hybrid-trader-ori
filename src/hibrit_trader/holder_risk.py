@@ -50,7 +50,12 @@ def holder_report_from_payload(data: dict, *, genesis_ok: bool = False) -> Safet
     if insiders >= 3 and not genesis_ok:
         reasons.append(f"insider holder {insiders}/5")
 
-    return SafetyReport(ok=not reasons, reasons=reasons)
+    metrics = {
+        "top1_holder_pct": round(top1, 2),
+        "top10_holder_pct": round(top10, 2),
+        "insider_count": insiders,
+    }
+    return SafetyReport(ok=not reasons, reasons=reasons, metrics=metrics)
 
 
 def check_holder_concentration(
