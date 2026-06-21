@@ -39,7 +39,7 @@ body.qc-body {
   color: var(--qc-text);
   min-height: 100vh;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: visible;
 }
 
 body.qc-body .app {
@@ -2199,4 +2199,17 @@ body.qc-body .topbar {
 .qc-pos-btn-close {
   border-color: rgba(255, 120, 100, 0.45);
   color: #ff9a8a;
+}
+
+/* Panel sadelestirme: DEX Trending altindaki bolumler gizlendi.
+   Islem gecmisi (#tradesPanel) tutuldu. DOM silinmedi cunku panel.js bu
+   ID'leri dolduruyor (null-guvensiz erisim); silmek panel dongusunu kirardi. */
+#saitoHub,
+#trendPanel,
+#decisionPanel,
+#walletBar,
+#growthPanel,
+#marketIntelPanel,
+#scanPanel {
+  display: none !important;
 }
