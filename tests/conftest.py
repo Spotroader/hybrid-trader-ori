@@ -17,6 +17,10 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("RUGCHECK_STRICT", "1")
     monkeypatch.setenv("PAPER_AGGRESSIVE", "0")
     monkeypatch.delenv("MAX_TOP10_HOLDER_PCT", raising=False)
+    # Telemetri yazimini izole et: testler gercek data/ + logs/'a yazmasin
+    # (ornek: killswitch.activate / engine buy-sell -> events/attribution).
+    monkeypatch.setattr("hibrit_trader.telemetry.DATA_DIR", tmp_path)
+    monkeypatch.setattr("hibrit_trader.telemetry.LOGS_DIR", tmp_path / "logs")
     monkeypatch.setenv("HIBRIT_BRAIN_AUTO", "0")
     monkeypatch.setenv("HIBRIT_BRAIN_ENABLED", "0")
 
