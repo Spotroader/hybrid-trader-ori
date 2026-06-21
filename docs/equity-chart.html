@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hibrit-trader - Toplam Equity (canli)</title>
+<style>
+ :root{--bg:#0b0e14;--panel:#11161f;--line:#3fb950;--line2:#f85149;--grid:#1c2330;--txt:#c9d1d9;--muted:#7d8694;--accent:#58a6ff;--evt:#d29922}
+ *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;padding:20px;display:flex;flex-direction:column;min-height:100vh}
+ h1{font-size:16px;font-weight:600;margin:0 0 4px} .sub{font-size:12px;color:var(--muted);margin-bottom:12px}
+ .live{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--line);margin-right:5px;animation:p 1.4s infinite}
+ @keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+ .stats{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+ .card{background:var(--panel);border:1px solid var(--grid);border-radius:10px;padding:10px 14px;min-width:120px}
+ .card .k{font-size:11px;color:var(--muted);margin-bottom:4px} .card .v{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+ .pos{color:var(--line)} .neg{color:var(--line2)}
+ .controls{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+ .controls button{background:var(--panel);color:var(--muted);border:1px solid var(--grid);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer}
+ .controls button:hover{color:var(--txt);border-color:var(--accent)} .controls button.active{background:var(--accent);color:#06101f;border-color:var(--accent);font-weight:600}
+ .chart-wrap{margin-top:auto;background:var(--panel);border:1px solid var(--grid);border-radius:12px;padding:14px 8px 8px;position:relative}
+ canvas{width:100%;display:block}
+ #tip{position:absolute;pointer-events:none;background:#0d1117;border:1px solid var(--grid);border-radius:8px;padding:8px 10px;font-size:12px;opacity:0;transition:opacity .1s;white-space:nowrap;z-index:5;font-variant-numeric:tabular-nums}
+ .legend{font-size:11px;color:var(--muted);margin-top:6px;display:flex;gap:16px;flex-wrap:wrap}
+ .dot{display:inline-block;width:10px;height:2px;vertical-align:middle;margin-right:5px}
+</style></head><body>
+ <h1>hibrit-trader <span style="color:var(--muted);font-weight:400">- Toplam Equity</span></h1>
+ <div class="sub"><span class="live" id="liveDot"></span><span id="liveTxt">canli baglaniyor...</span></div>
+ <div class="stats" id="stats"></div>
+ <div class="controls" id="ranges">
+  <button data-h="1">Son 1s</button><button data-h="6">Son 6s</button><button data-h="24">Son 24s</button>
+  <button data-h="168">1 hafta</button><button data-h="336">2 hafta</button><button data-h="720">1 ay</button>
+  <button data-evt="Faz A">Faz A sonrasi</button><button data-evt="C1">C1 sonrasi</button>
+  <button data-h="0" class="active">Tumu</button>
+ </div>
+ <div class="chart-wrap"><canvas id="c"></canvas><div id="tip"></div></div>
+ <div class="legend">
+  <span><i class="dot" style="background:var(--accent)"></i>Kasa (realized: kapanan islemler)</span>
+  <span><i class="dot" style="background:var(--line)"></i>Toplam equity (MTM: + acik pozisyonlar)</span>
+  <span><i class="dot" style="background:var(--evt)"></i>Faz A / C1</span>
+ </div>
+<script>
+const FALLBACK = {"base":499.967948,"data":[[1782043579429,-0.3758],[1782043766468,-24.9941],[1782043804567,-0.3524],[1782043804569,-12.5967],[1782043911371,-8.7701],[1782043911372,0.5438],[1782043981002,-0.9741],[1782044664201,-0.8628],[1782045713213,0.4237],[1782045713215,10.4342],[1782045902441,-2.1115],[1782047446922,-2.1331],[1782047518021,-3.3398],[1782048031913,62.8551],[1782048147343,2.4457],[1782048368517,-0.4481],[1782048405776,0.9425]],"events":[],"now":{"ms":1782048405776,"equity":520.65,"realized":20.69,"unrealized":0.0,"cash":520.65,"deployed":0}};
+let BASE=500, EVENTS=[], NOW=null, SERIES=[], view=[], hover=-1, activeBtn=null;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),tip=document.getElementById('tip');
+
+function rebuild(d){
+  BASE=d.base; EVENTS=d.events||[]; NOW=d.now||null;
+  let cum=BASE;
+  SERIES=(d.data||[]).map(([ms,pnl])=>{cum=Math.round((cum+pnl)*100)/100;return {ms,eq:cum,pnl};});
+  if(NOW && NOW.equity!=null){ SERIES.push({ms:NOW.ms, eq:Math.round(NOW.equity*100)/100, pnl:null, live:true}); }
+  applyActive(); setStats(); draw();
+}
+function fmt(n){return (n>=0?'+':'')+(+n).toFixed(2);}
+function usd(n){return '$'+(+n).toFixed(2);}
+function ftime(ms){return new Date(ms).toLocaleString('tr-TR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
+
+function setStats(){
+  if(!SERIES.length)return;
+  const realizedEnd = NOW && NOW.realized!=null ? BASE+NOW.realized : SERIES[SERIES.length-1].eq;
+  const eq = NOW && NOW.equity!=null ? NOW.equity : SERIES[SERIES.length-1].eq;
+  const unreal = NOW ? (NOW.unrealized||0) : 0;
+  const tot = eq-BASE;
+  const cls=v=>v>=0?'pos':'neg';
+  document.getElementById('stats').innerHTML=`
+   <div class="card"><div class="k">Toplam equity (MTM)</div><div class="v">${usd(eq)}</div></div>
+   <div class="card"><div class="k">Toplam P&amp;L</div><div class="v ${cls(tot)}">${fmt(tot)}</div></div>
+   <div class="card"><div class="k">Realized</div><div class="v ${cls(realizedEnd-BASE)}">${fmt(realizedEnd-BASE)}</div></div>
+   <div class="card"><div class="k">Unrealized (acik)</div><div class="v ${cls(unreal)}">${fmt(unreal)}</div></div>
+   <div class="card"><div class="k">Baslangic</div><div class="v">${usd(BASE)}</div></div>`;
+}
+function draw(){
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=Math.max(360,Math.round(window.innerHeight*0.46));
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+  if(!view.length)return;
+  const padL=58,padR=14,padT=14,padB=26,x0=padL,x1=W-padR,y0=padT,y1=H-padB;
+  const t0=view[0].ms,t1=view[view.length-1].ms,tr=(t1-t0)||1;
+  let lo=Math.min(...view.map(s=>s.eq)),hi=Math.max(...view.map(s=>s.eq));const pd=(hi-lo)*0.12||1;lo-=pd;hi+=pd;const vr=hi-lo;
+  const X=ms=>x0+(ms-t0)/tr*(x1-x0),Y=v=>y1-(v-lo)/vr*(y1-y0);
+  ctx.font='11px sans-serif';ctx.textBaseline='middle';
+  for(let i=0;i<=4;i++){const v=lo+vr*i/4,y=Y(v);ctx.strokeStyle='#1c2330';ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x1,y);ctx.stroke();ctx.fillStyle='#7d8694';ctx.textAlign='right';ctx.fillText('$'+v.toFixed(0),x0-8,y);}
+  ctx.textAlign='center';
+  for(let i=0;i<=4;i++){const ms=t0+tr*i/4;ctx.fillStyle='#7d8694';ctx.fillText(new Date(ms).toLocaleString('tr-TR',{month:'2-digit',day:'2-digit',hour:'2-digit'}),X(ms),y1+14);}
+  if(BASE>=lo&&BASE<=hi){const yb=Y(BASE);ctx.strokeStyle='#30363d';ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x0,yb);ctx.lineTo(x1,yb);ctx.stroke();ctx.setLineDash([]);}
+  EVENTS.forEach(e=>{if(e.ms<t0||e.ms>t1)return;const x=X(e.ms);ctx.strokeStyle='#d29922';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y1);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle='#d29922';ctx.textAlign='left';ctx.fillText(' '+e.label,x+2,y0+8);});
+  const g=ctx.createLinearGradient(0,y0,0,y1);g.addColorStop(0,'rgba(88,166,255,0.26)');g.addColorStop(1,'rgba(88,166,255,0.02)');
+  ctx.beginPath();ctx.moveTo(X(view[0].ms),y1);view.forEach(s=>ctx.lineTo(X(s.ms),Y(s.eq)));ctx.lineTo(X(view[view.length-1].ms),y1);ctx.closePath();ctx.fillStyle=g;ctx.fill();
+  ctx.beginPath();view.forEach((s,i)=>{const x=X(s.ms),y=Y(s.eq);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.strokeStyle='#58a6ff';ctx.lineWidth=1.8;ctx.lineJoin='round';ctx.stroke();
+  const last=view[view.length-1];
+  if(last.live){const x=X(last.ms),y=Y(last.eq);ctx.fillStyle='#3fb950';ctx.beginPath();ctx.arc(x,y,4,0,7);ctx.fill();ctx.strokeStyle='rgba(63,185,80,.4)';ctx.lineWidth=1;ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.stroke();}
+  if(hover>=0&&hover<view.length){const s=view[hover],x=X(s.ms),y=Y(s.eq);ctx.strokeStyle='rgba(201,209,217,.25)';ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y1);ctx.stroke();ctx.fillStyle='#58a6ff';ctx.beginPath();ctx.arc(x,y,3.5,0,7);ctx.fill();tip.style.opacity=1;tip.innerHTML=`<b>$${s.eq.toFixed(2)}</b> <span style="color:#7d8694">(${(s.eq-BASE>=0?'+':'')+(s.eq-BASE).toFixed(2)})</span><br><span style="color:#7d8694">${ftime(s.ms)}</span>`+(s.live?'<br><span style="color:#3fb950">CANLI (MTM, acik dahil)</span>':(s.pnl!=null?`<br>trade: <span class="${s.pnl>=0?'pos':'neg'}">${fmt(s.pnl)}</span>`:''));const wr=cv.parentElement.getBoundingClientRect();let lx=x+12;if(lx>wr.width-160)lx=x-160;tip.style.left=lx+'px';tip.style.top=(y-10)+'px';}else tip.style.opacity=0;
+}
+function applyActive(){
+  if(!activeBtn)activeBtn=document.querySelector('#ranges button.active');
+  const b=activeBtn;hover=-1;
+  if(b&&b.dataset.evt){const e=EVENTS.find(x=>x.label===b.dataset.evt);view=e?SERIES.filter(s=>s.ms>=e.ms):SERIES;}
+  else{const h=b?+b.dataset.h:0;if(!h)view=SERIES;else{const cut=(SERIES.length?SERIES[SERIES.length-1].ms:0)-h*3600*1000;view=SERIES.filter(s=>s.ms>=cut);}}
+  if(!view.length)view=SERIES.slice(-2);
+}
+cv.addEventListener('mousemove',ev=>{const r=cv.getBoundingClientRect(),mx=ev.clientX-r.left;if(!view.length)return;const t0=view[0].ms,t1=view[view.length-1].ms,frac=(mx-58)/((r.width-14)-58),tms=t0+frac*(t1-t0);let best=0,bd=1e15;view.forEach((s,i)=>{const d=Math.abs(s.ms-tms);if(d<bd){bd=d;best=i;}});hover=best;draw();});
+cv.addEventListener('mouseleave',()=>{hover=-1;draw();});
+document.querySelectorAll('#ranges button').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('#ranges button').forEach(x=>x.classList.remove('active'));b.classList.add('active');activeBtn=b;applyActive();draw();}));
+window.addEventListener('resize',draw);
+
+async function load(){
+  try{
+    const r=await fetch('/equity-data.json',{cache:'no-store'});
+    if(!r.ok)throw 0; const d=await r.json(); rebuild(d);
+    document.getElementById('liveDot').style.background='#3fb950';
+    document.getElementById('liveTxt').textContent='canli - son guncelleme '+new Date().toLocaleTimeString('tr-TR')+(NOW&&NOW.equity!=null?' (acik: '+(NOW.unrealized>=0?'+':'')+(+NOW.unrealized).toFixed(2)+'$)':'');
+  }catch(e){
+    rebuild(FALLBACK);
+    document.getElementById('liveDot').style.background='#f85149';
+    document.getElementById('liveTxt').textContent='offline (gomulu veri) - canli icin: python3 docs/equity-server.py';
+  }
+}
+load(); setInterval(load,30000);
+</script></body></html>
