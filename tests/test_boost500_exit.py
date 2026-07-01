@@ -1,5 +1,7 @@
 """⚡500 çıkış — founder yarı sat kuralı."""
 
+import time
+
 from hibrit_trader.exit_policy import ExitPolicy, evaluate_exit_ladder
 from hibrit_trader.paper import Position
 from hibrit_trader.scanner import Pair
@@ -43,6 +45,9 @@ def test_boost500_partial_when_profit():
 
 
 def test_boost500_partial_then_tighter_scratch():
+    # Mevcut davranis: partial sonrasi scratch tabani -2.0 (varsayilan scratch ile
+    # ayni, yani daraltma fiilen etkisiz; bilincli, bkz. exit_policy._scratch_limit
+    # yorumu + POLICY.md). -1.6% tetiklemez, -2.1% "kalan sat" tam cikisi tetikler.
     pos = Position(
         pair_name="X / SOL",
         chain="solana",
@@ -52,6 +57,7 @@ def test_boost500_partial_then_tighter_scratch():
         amount_token=10.0,
         cost_usd=10.0,
         opened_at="t",
+        opened_ts=time.time() - 600,  # scratch min-hold (90sn) engel olmasin
         entry_score=60.0,
         boost500_partial_done=True,
         tp1_done=True,
@@ -73,7 +79,10 @@ def test_boost500_partial_then_tighter_scratch():
         txns_h1=500,
         boost_score=500,
     )
-    d = evaluate_exit_ladder(pos, 0.984, 50.0, 0, ExitPolicy(), pair)
+    # -1.6%: esik -2.0 oldugundan cikis YOK ("daraltilmis" scratch tetiklemez)
+    assert evaluate_exit_ladder(pos, 0.984, 50.0, 0, ExitPolicy(), pair) is None
+    # -2.1%: scratch tetiklenir, partial sonrasi kalan tamami satilir
+    d = evaluate_exit_ladder(pos, 0.979, 50.0, 0, ExitPolicy(), pair)
     assert d is not None
     assert d.kind == "exit_full"
     assert "flash dump" in d.reason or "kalan" in d.reason

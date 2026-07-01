@@ -17,6 +17,10 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("RUGCHECK_STRICT", "1")
     monkeypatch.setenv("PAPER_AGGRESSIVE", "0")
     monkeypatch.delenv("MAX_TOP10_HOLDER_PCT", raising=False)
+    # .env kalibrasyon knob'lari test varsayimlarini ezmesin: testler kod
+    # varsayilanini sinar, calisan sistemin .env kalibrasyonu degismeden kalir.
+    monkeypatch.delenv("PAPER_SLIPPAGE_PCT", raising=False)
+    monkeypatch.setenv("ALPHA_RPC_FALLBACK", "1")
     # Telemetri yazimini izole et: testler gercek data/ + logs/'a yazmasin
     # (ornek: killswitch.activate / engine buy-sell -> events/attribution).
     monkeypatch.setattr("hibrit_trader.telemetry.DATA_DIR", tmp_path)

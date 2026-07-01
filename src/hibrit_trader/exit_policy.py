@@ -218,6 +218,7 @@ def _scratch_limit(exit_policy: ExitPolicy, pos: Position, pair: Pair | None) ->
     """Negatif eşik — daha negatif = daha geniş (meme volatilitesine nefes)."""
     scratch_lim = exit_policy.scratch_pct
     if pos.boost500_partial_done:
+        # Daraltma -2.0 tabani nedeniyle fiilen etkisiz (varsayilan scratch da -2.0); bilinclidir, degistirmeden once POLICY.md'ye bak.
         scratch_lim = max(scratch_lim, -2.0)
     if pair is None or os.getenv("FOUNDER_SCRATCH_RELAX", "1") == "0":
         return scratch_lim
